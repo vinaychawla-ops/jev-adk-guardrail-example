@@ -32,6 +32,18 @@ guardrail inside a Google ADK agent's `before_tool_callback`. Public demo repo.
 - `pytest -q` -- full suite; live tests skip without a key
 - `pytest -q tests/test_guardrail.py tests/test_jev_client.py` -- offline only
 
+## Observability
+- `audit.py` provides `AuditLog`: in-memory `events` list plus an optional
+  JSONL file (`AuditLog(path="audit.jsonl")`, one line per decision).
+- Pass `audit=` to `make_jev_guardrail()`; every callback records one event:
+  `ts`, `component="guardrail"`, `jev_model`, `tool`, `args`, `question_id`,
+  `p_risky`, `threshold`, `latency_ms`, and `verdict` in
+  {allowed, blocked, skipped, allowed-fallback, blocked-fallback} with a
+  `reason` on fallbacks. Skipped tools are logged even though Jev isn't called.
+- `audit.summary()` -> `{"total": n, "by_verdict": {...}}`.
+- `demo.py --audit PATH` exercises the full audit path end to end.
+- No credentials are ever recorded. `audit=None` (default) keeps zero overhead.
+
 ## Deploy notes
 - Default is `fail_open=True` (Jev outage -> allow + warning). Production
   destructive tools should consider `fail_open=False`.
