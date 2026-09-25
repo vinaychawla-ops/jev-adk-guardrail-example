@@ -10,6 +10,7 @@ import json
 import sys
 from types import SimpleNamespace
 
+from audit import AuditLog
 from guardrail import make_jev_guardrail
 
 MOCK_P = {"delete_customer_account": 0.93, "lookup_customer": 0.04}
@@ -41,15 +42,21 @@ def run(callback, label):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--live", action="store_true", help="call the real Jev API")
+    ap.add_argument("--audit", metavar="PATH", default=None,
+                    help="write a JSONL audit log of every decision to PATH")
     ns = ap.parse_args()
 
+    audit = AuditLog(path=ns.audit) if ns.audit else None
     if ns.live:
-        callback = make_jev_guardrail(guard_tools={"delete_customer_account"})
+        callback = make_jev_guardrail(guard_tools={"delete_customer_account"}, audit=audit)
         run(callback, "LIVE Jev (typesafe/jev-1.13 via OpenRouter Decisions API)")
     else:
-        callback = make_jev_guardrail(decide_fn=mock_decide, guard_tools={"delete_customer_account"})
+        callback = make_jev_guardrail(decide_fn=mock_decide, guard_tools={"delete_customer_account"}, audit=audit)
         run(callback, "MOCK Jev (no API calls)")
         print("\nTip: re-run with --live to evaluate the same calls with real Jev.")
+    if audit is not None:
+        print(f"\naudit: {len(audit)} decisions recorded -> {ns.audit}")
+        print(f"summary: {json.dumps(audit.summary())}")
 
 
 if __name__ == "__main__":

@@ -25,6 +25,8 @@ import json
 import logging
 from typing import Callable, Dict, Optional
 
+from audit import AuditLog
+from jev_client import MODEL as JEV_MODEL
 from jev_client import JevError, decide, noul_probability
 
 logger = logging.getLogger(__name__)
@@ -63,6 +65,7 @@ def make_jev_guardrail(
     guard_tools: Optional[set] = None,
     fail_open: bool = True,
     model: Optional[str] = None,
+    audit: Optional[AuditLog] = None,
 ):
     """Build a ``before_tool_callback(tool, args, tool_context)`` for ADK.
 
@@ -76,23 +79,35 @@ def make_jev_guardrail(
         fail_open: if True (default), a Jev outage lets the tool run and
             logs a warning. If False, the tool is blocked instead.
         model: override the Jev model pin (default ``typesafe/jev-1.13``).
+        audit: optional :class:`audit.AuditLog`. Every decision -- allowed,
+            blocked, skipped, and fallbacks -- is recorded for auditing.
     """
     _decide = decide_fn or decide
+    _audit = audit
+    _jev_model = model or JEV_MODEL
+
+    def _record(**fields):
+        if _audit is not None:
+            _audit.record({"component": "guardrail", "jev_model": _jev_model, **fields})
 
     def jev_before_tool_callback(tool, args, tool_context):
         tool_name = getattr(tool, "name", None) or str(tool)
 
         if guard_tools is not None and tool_name not in guard_tools:
+            _record(tool=tool_name, verdict="skipped",
+                    detail="tool not in guard_tools; Jev not called")
             return None  # not a guarded tool: no Jev call, no latency
 
         state = build_state(tool_name, args or {})
 
         try:
             kwargs = {"model": model} if model else {}
-            response, _latency_ms = _decide(state, RISK_QUESTION, **kwargs)
+            response, latency_ms = _decide(state, RISK_QUESTION, **kwargs)
             risk = noul_probability(response, RISK_QUESTION_ID)
         except JevError as exc:
             logger.warning("Jev risk check failed (%s); %s", exc, "allowing" if fail_open else "blocking")
+            _record(tool=tool_name, args=args or {}, verdict="allowed-fallback" if fail_open else "blocked-fallback",
+                    reason=str(exc), detail="Jev unreachable or returned unusable answer")
             if fail_open:
                 return None
             return {
@@ -102,8 +117,13 @@ def make_jev_guardrail(
                 "guardrail is configured fail-closed.",
             }
 
+        base = {"tool": tool_name, "args": args or {}, "question_id": RISK_QUESTION_ID,
+                "p_risky": risk, "threshold": threshold, "latency_ms": latency_ms}
+
         if not 0.0 <= risk <= 1.0:
             logger.warning("Jev returned out-of-range probability %r; %s", risk, "allowing" if fail_open else "blocking")
+            _record(**base, verdict="allowed-fallback" if fail_open else "blocked-fallback",
+                    reason=f"out-of-range probability {risk!r}")
             if fail_open:
                 return None
             return {
@@ -114,6 +134,7 @@ def make_jev_guardrail(
 
         if risk >= threshold:
             logger.warning("JEV BLOCK: %s P(risky)=%.3f >= threshold %.2f", tool_name, risk, threshold)
+            _record(**base, verdict="blocked")
             return {
                 "status": "blocked",
                 "reason": "jev-risk-guardrail",
@@ -127,6 +148,7 @@ def make_jev_guardrail(
                 ),
             }
 
+        _record(**base, verdict="allowed")
         return None  # safe: let the tool run
 
     return jev_before_tool_callback

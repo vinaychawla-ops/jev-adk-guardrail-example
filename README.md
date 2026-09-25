@@ -68,6 +68,26 @@ See `agent.py` for the full working agent.
 | `fail_open`   | `True`               | Jev outage -> allow (log warning) vs block (`False` = fail-closed) |
 | `model`       | `typesafe/jev-1.13`  | Pinned Jev version for stability |
 
+## Observability
+
+Pass an `AuditLog` to record every decision for auditing -- allowed, blocked,
+skipped tools, and fallbacks, each with timestamp, tool, args, P(risky),
+threshold, Jev model, and latency:
+
+```python
+from audit import AuditLog
+from guardrail import make_jev_guardrail
+
+audit = AuditLog(path="audit.jsonl")  # omit path for in-memory only
+callback = make_jev_guardrail(guard_tools={"delete_customer_account"}, audit=audit)
+...
+print(audit.summary())
+# {'total': 12, 'by_verdict': {'allowed': 8, 'blocked': 3, 'allowed-fallback': 1}}
+```
+
+`python demo.py --audit audit.jsonl` writes a line-per-decision JSONL trail
+you can grep or load into a dataframe. No credentials are ever recorded.
+
 ## Jev API notes
 
 - Endpoint is `POST https://openrouter.ai/api/alpha/decisions` -- the
@@ -90,6 +110,7 @@ See `agent.py` for the full working agent.
 
 - `jev_client.py` -- stdlib-only Jev Decisions API client
 - `guardrail.py` -- `make_jev_guardrail()`: the ADK `before_tool_callback`
+- `audit.py` -- `AuditLog`: in-memory + JSONL audit trail of every decision
 - `agent.py` -- working ADK agent (`delete_customer_account` guarded, `lookup_customer` open)
 - `demo.py` -- mock or `--live` end-to-end demo
 - `tests/` -- mocked unit tests + live integration tests (skipped without a key)
